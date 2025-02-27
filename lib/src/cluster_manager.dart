@@ -17,7 +17,7 @@ class MaxDistParams {
 }
 
 class ClusterManager<T extends ClusterItem> {
-  ClusterManager(this._items, this.updateMarkers,
+  ClusterManager(this._items,
       {Future<Marker> Function(Cluster<T>)? markerBuilder,
       this.levels = const [1, 4.25, 6.75, 8.25, 11.5, 14.5, 16.0, 16.5, 20.0],
       this.extraPercent = 0.5,
@@ -33,9 +33,6 @@ class ClusterManager<T extends ClusterItem> {
 
   // Num of Items to switch from MAX_DIST algo to GEOHASH
   final int maxItemsForMaxDistAlgo;
-
-  /// Function to update Markers on Google Map
-  final void Function(Set<Marker>) updateMarkers;
 
   /// Zoom levels configuration
   final List<double> levels;
@@ -61,6 +58,10 @@ class ClusterManager<T extends ClusterItem> {
   Iterable<T> get items => _items;
   Iterable<T> _items;
 
+  /// List of items
+  Set<Marker> get markers => _markers;
+  Set<Marker> _markers = {};
+
   /// Last known zoom
   late double _zoom;
 
@@ -84,7 +85,7 @@ class ClusterManager<T extends ClusterItem> {
     final Set<Marker> markers =
         Set.from(await Future.wait(mapMarkers.map((m) => markerBuilder(m))));
 
-    updateMarkers(markers);
+    _markers = markers;
   }
 
   /// Update all cluster items
