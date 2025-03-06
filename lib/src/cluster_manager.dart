@@ -8,6 +8,13 @@ import 'package:google_maps_cluster_manager/src/max_dist_clustering.dart';
 import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart'
     hide Cluster;
 
+class GetMarkerResult<T extends ClusterItem> {
+  final List<Cluster<T>> clusterableMarkers;
+  final List<T> unclusterableMarkers;
+
+  GetMarkerResult({required this.clusterableMarkers, required this.unclusterableMarkers});
+}
+
 enum ClusterAlgorithm { GEOHASH, MAX_DIST }
 
 class MaxDistParams {
@@ -18,18 +25,23 @@ class MaxDistParams {
 
 class ClusterManager<T extends ClusterItem> {
   ClusterManager(this._items,
-      {Future<Marker> Function(Cluster<T>)? markerBuilder,
+      {Future<Marker> Function(Cluster<T>)? clusterBuilder,
+      required Future<Marker> Function(T) markerBuilder,
       this.levels = const [1, 4.25, 6.75, 8.25, 11.5, 14.5, 16.0, 16.5, 20.0],
       this.extraPercent = 0.5,
       this.maxItemsForMaxDistAlgo = 200,
       this.clusterAlgorithm = ClusterAlgorithm.GEOHASH,
       this.maxDistParams,
       this.stopClusteringZoom})
-      : this.markerBuilder = markerBuilder ?? _basicMarkerBuilder,
+      : this.clusterBuilder = clusterBuilder ?? _basicMarkerBuilder,
+      this.markerBuilder = markerBuilder,
         assert(levels.length <= precision);
 
+  /// Method to build cluster markers
+  final Future<Marker> Function(Cluster<T>) clusterBuilder;
+
   /// Method to build markers
-  final Future<Marker> Function(Cluster<T>) markerBuilder;
+  final Future<Marker> Function(T) markerBuilder;
 
   // Num of Items to switch from MAX_DIST algo to GEOHASH
   final int maxItemsForMaxDistAlgo;
@@ -80,10 +92,17 @@ class ClusterManager<T extends ClusterItem> {
   }
 
   void _updateClusters() async {
-    List<Cluster<T>> mapMarkers = await getMarkers();
+    GetMarkerResult<T> result = await getMarkers();
+    List<Cluster<T>> mapClusterMarkers = result.clusterableMarkers;
+    List<T> mapMarkers = result.unclusterableMarkers;
+
+    final Set<Marker> clusterMarkers =
+        Set.from(await Future.wait(mapClusterMarkers.map((m) => clusterBuilder(m))));
 
     final Set<Marker> markers =
         Set.from(await Future.wait(mapMarkers.map((m) => markerBuilder(m))));
+
+    markers.addAll(clusterMarkers);
 
     _markers = markers;
   }
@@ -109,8 +128,8 @@ class ClusterManager<T extends ClusterItem> {
   }
 
   /// Retrieve cluster markers
-  Future<List<Cluster<T>>> getMarkers() async {
-    if (_mapId == null) return List.empty();
+  Future<GetMarkerResult<T>> getMarkers() async {
+    if (_mapId == null) return GetMarkerResult(clusterableMarkers: [], unclusterableMarkers: []);
 
     final LatLngBounds mapBounds = await GoogleMapsFlutterPlatform.instance
         .getVisibleRegion(mapId: _mapId!);
@@ -126,21 +145,33 @@ class ClusterManager<T extends ClusterItem> {
       return inflatedBounds.contains(i.location);
     }).toList();
 
+    final unclusterableMarkers = visibleItems.where((i) => !i.canCluster).toList();
+    final clusterableMarkers = visibleItems.where((i) => i.canCluster).toList();
+
     if (stopClusteringZoom != null && _zoom >= stopClusteringZoom!)
-      return visibleItems.map((i) => Cluster<T>.fromItems([i])).toList();
+      return GetMarkerResult(
+        clusterableMarkers: clusterableMarkers.map((i) => Cluster<T>.fromItems([i])).toList(),
+        unclusterableMarkers: unclusterableMarkers
+      ); 
 
     List<Cluster<T>> markers;
 
     if (clusterAlgorithm == ClusterAlgorithm.GEOHASH ||
         visibleItems.length >= maxItemsForMaxDistAlgo) {
       int level = _findLevel(levels);
-      markers = _computeClusters(visibleItems, List.empty(growable: true),
-          level: level);
+      markers = _computeClusters(
+        clusterableMarkers,
+        List.empty(growable: true),
+        level: level
+      );
     } else {
-      markers = _computeClustersWithMaxDist(visibleItems, _zoom);
+      markers = _computeClustersWithMaxDist(clusterableMarkers, _zoom);
     }
 
-    return markers;
+    return GetMarkerResult(
+      clusterableMarkers: markers,
+      unclusterableMarkers: unclusterableMarkers
+    );
   }
 
   LatLngBounds _inflateBounds(LatLngBounds bounds) {
@@ -203,13 +234,6 @@ class ClusterManager<T extends ClusterItem> {
       {int level = 5}) {
     if (inputItems.isEmpty) return markerItems;
     String nextGeohash = inputItems[0].geohash.substring(0, level);
-
-    List<T> items = inputItems
-        .where((p) => 
-          p.geohash.substring(0, level) == nextGeohash
-          && p.canCluster
-        )
-        .toList();
 
     markerItems.add(Cluster<T>.fromItems(items));
 
