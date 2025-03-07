@@ -27,6 +27,7 @@ class ClusterManager<T extends ClusterItem> {
   ClusterManager(this._items,
       {Future<Marker> Function(Cluster<T>)? clusterBuilder,
       required Future<Marker> Function(T) markerBuilder,
+      required void Function() updateClusters,
       this.levels = const [1, 4.25, 6.75, 8.25, 11.5, 14.5, 16.0, 16.5, 20.0],
       this.extraPercent = 0.5,
       this.maxItemsForMaxDistAlgo = 200,
@@ -35,6 +36,7 @@ class ClusterManager<T extends ClusterItem> {
       this.stopClusteringZoom})
       : this.clusterBuilder = clusterBuilder ?? _basicMarkerBuilder,
       this.markerBuilder = markerBuilder,
+      this.updateClusters = updateClusters,
         assert(levels.length <= precision);
 
   /// Method to build cluster markers
@@ -42,6 +44,9 @@ class ClusterManager<T extends ClusterItem> {
 
   /// Method to build markers
   final Future<Marker> Function(T) markerBuilder;
+
+  /// Method to update the map
+  final void Function() updateClusters;
 
   // Num of Items to switch from MAX_DIST algo to GEOHASH
   final int maxItemsForMaxDistAlgo;
@@ -97,14 +102,16 @@ class ClusterManager<T extends ClusterItem> {
     List<T> mapMarkers = result.unclusterableMarkers;
 
     final Set<Marker> clusterMarkers =
-        Set.from(await Future.wait(mapClusterMarkers.map((m) => clusterBuilder(m))));
+      Set.from(await Future.wait(mapClusterMarkers.map((m) => clusterBuilder(m))));
 
-    final Set<Marker> markers =
-        Set.from(await Future.wait(mapMarkers.map((m) => markerBuilder(m))));
+    final Set<Marker> listOfMarkers =
+      Set.from(await Future.wait(mapMarkers.map((m) => markerBuilder(m))));
 
-    markers.addAll(clusterMarkers);
+    listOfMarkers.addAll(clusterMarkers);
 
-    _markers = markers;
+    _markers = listOfMarkers;
+
+    updateClusters();
   }
 
   /// Update all cluster items
@@ -154,23 +161,33 @@ class ClusterManager<T extends ClusterItem> {
         unclusterableMarkers: unclusterableMarkers
       ); 
 
-    List<Cluster<T>> markers;
+    List<Cluster<T>> listOfClusteredMarkers;
 
     if (clusterAlgorithm == ClusterAlgorithm.GEOHASH ||
         visibleItems.length >= maxItemsForMaxDistAlgo) {
       int level = _findLevel(levels);
-      markers = _computeClusters(
+      listOfClusteredMarkers = _computeClusters(
         clusterableMarkers,
         List.empty(growable: true),
         level: level
       );
     } else {
-      markers = _computeClustersWithMaxDist(clusterableMarkers, _zoom);
+      listOfClusteredMarkers = _computeClustersWithMaxDist(clusterableMarkers, _zoom);
     }
 
+    final multipleClusters = listOfClusteredMarkers.where(
+      (item) => item.isMultiple
+      ).toList();
+      
+    final singleClusters = listOfClusteredMarkers.where(
+      (item) => !item.isMultiple
+      ).map((cluster) => cluster.items.first).toList();
+
+    singleClusters.addAll(unclusterableMarkers);
+
     return GetMarkerResult(
-      clusterableMarkers: markers,
-      unclusterableMarkers: unclusterableMarkers
+      clusterableMarkers: multipleClusters,
+      unclusterableMarkers: singleClusters
     );
   }
 
@@ -234,7 +251,9 @@ class ClusterManager<T extends ClusterItem> {
       {int level = 5}) {
     if (inputItems.isEmpty) return markerItems;
     String nextGeohash = inputItems[0].geohash.substring(0, level);
-
+    List<T> items = inputItems
+        .where((p) => p.geohash.substring(0, level) == nextGeohash)
+        .toList();
     markerItems.add(Cluster<T>.fromItems(items));
 
     List<T> newInputList = List.from(
