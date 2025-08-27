@@ -79,6 +79,9 @@ class ClusterManager<T extends ClusterItem> {
   Set<Marker> get markers => _markers;
   Set<Marker> _markers = {};
 
+  Set<Marker> get unclusteredMarkers => _unclusteredMarkers;
+  Set<Marker> _unclusteredMarkers = {};
+
   /// Last known zoom
   late double _zoom;
 
@@ -107,9 +110,9 @@ class ClusterManager<T extends ClusterItem> {
     final Set<Marker> listOfMarkers =
       Set.from(await Future.wait(mapMarkers.map((m) => markerBuilder(m))));
 
-    listOfMarkers.addAll(clusterMarkers);
+    _unclusteredMarkers = listOfMarkers;
 
-    _markers = listOfMarkers;
+    _markers = {...listOfMarkers, ...clusterMarkers};
 
     updateClusters();
   }
